@@ -17,7 +17,7 @@ service cloud.firestore {
 
     // ARCHITECTURAL UPGRADE: Centralized Role-Based Access Control (RBAC)
     function isAdmin() {
-      return isAuthenticated() && request.auth.uid == 'OFmUHrJIs8Nr2Opc25VVzo9LRTA2';
+      return isAuthenticated() && (request.auth.uid == 'OFmUHrJIs8Nr2Opc25VVzo9LRTA2' || request.auth.token.email == 'slicktimepro@gmail.com');
     }
 
     // ----------------------------------------------------------------------
@@ -37,11 +37,9 @@ service cloud.firestore {
       // Allow reading only if the user is requesting their own document
       allow read: if isOwner(userId);
       
-      // Restrict document creation
-      // Tradeoff: We force the 'subscriptionTier' to 'free' on creation to prevent 
-      // malicious actors from setting their own tier to 'grand-sub' via the client console.
+      // ARCHITECTURAL UPGRADE: Harmonized with official Slick Time taxonomy
       allow create: if isOwner(userId) 
-                    && request.resource.data.subscriptionTier == 'free';
+                    && request.resource.data.subscriptionTier in ['hung-rui-chen', 'club-sandwich', 'grand-submarine'];
                     
       // Restrict document updates
       // Prevents client-side mutation of the subscription tier. Upgrades must be 

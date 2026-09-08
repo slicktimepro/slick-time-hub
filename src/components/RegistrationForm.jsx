@@ -1,6 +1,7 @@
 import { hashPin } from '../utils/crypto';
 import React, { useState } from 'react';
-import { auth, db, createUserWithEmailAndPassword } from '../firebase';
+// ARCHITECTURAL UPGRADE: Added sendEmailVerification
+import { auth, db, createUserWithEmailAndPassword, sendEmailVerification } from '../firebase';
 import { doc, setDoc, collection, addDoc } from 'firebase/firestore';
 import emailjs from '@emailjs/browser'; 
 import AvatarSelector from './AvatarSelector';
@@ -23,7 +24,7 @@ export default function RegistrationForm({ language, onSuccess }) {
     avatarId: '',
     avatarSrc: '',
     parentPin: '',
-    subscriptionTier: 'hung-rui-chen', // UPGRADED: Default to new free tier
+    subscriptionTier: 'hung-rui-chen', 
     bankLastFour: ''
   });
   
@@ -60,14 +61,14 @@ export default function RegistrationForm({ language, onSuccess }) {
       setError(language === 'zh' ? '請同意隱私權政策。' : 'You must agree to the Privacy Policy.');
       return;
     }
-    // UPGRADED: Trigger validation if it's NOT the free tier
+    
     if (formData.subscriptionTier !== 'hung-rui-chen' && formData.bankLastFour.length !== 4) {
       setError(language === 'zh' ? '請輸入有效的匯款帳號後4碼。' : 'Please enter a valid 4-digit bank account ending.');
       return;
     }
 
     setLoading(true);
-
+    
     try {
       let targetUser = currentUser;
 
@@ -80,28 +81,43 @@ export default function RegistrationForm({ language, onSuccess }) {
         throw new Error("Authentication state lost. Please try logging in again.");
       }
 
-      const securedPinHash = await hashPin(formData.parentPin, targetUser.uid);
+      // ARCHITECTURAL UPGRADE: Force token sync to bypass the Firestore race condition
+      await targetUser.getIdToken(true);
 
+      // ARCHITECTURAL UPGRADE: Native Firebase Email Verification
+      if (!isOAuth) {
+        await sendEmailVerification(targetUser);
+      }
+
+      const securedPinHash = await hashPin(formData.parentPin, targetUser.uid);
       const parentRef = doc(db, 'users', targetUser.uid);
-      await setDoc(parentRef, {
-        parentName: formData.parentName,
-        email: formData.email, 
-        parentPin: securedPinHash, 
-        createdAt: new Date().toISOString(),
-        subscriptionTier: formData.subscriptionTier,
-        // UPGRADED: Check logic against free tier
-        bankLastFour: formData.subscriptionTier !== 'hung-rui-chen' ? formData.bankLastFour : null,
-        accountStatus: formData.subscriptionTier !== 'hung-rui-chen' ? 'pending_verification' : 'active'
-      });
+
+      try {
+        await setDoc(parentRef, {
+          parentName: formData.parentName,
+          email: formData.email, 
+          parentPin: securedPinHash, 
+          createdAt: new Date().toISOString(),
+          subscriptionTier: formData.subscriptionTier,
+          bankLastFour: formData.subscriptionTier !== 'hung-rui-chen' ? formData.bankLastFour : null,
+          accountStatus: formData.subscriptionTier !== 'hung-rui-chen' ? 'pending_verification' : 'active'
+        });
+      } catch (err) {
+        throw new Error("Parent DB Rejected: " + err.message);
+      }
 
       const studentsRef = collection(db, 'users', targetUser.uid, 'students');
-      await addDoc(studentsRef, {
-        screenName: formData.studentName,
-        gradeLevel: formData.gradeLevel,
-        avatarId: formData.avatarId,
-        avatarSrc: formData.avatarSrc,
-        progress: {} 
-      });
+      try {
+        await addDoc(studentsRef, {
+          screenName: formData.studentName,
+          gradeLevel: formData.gradeLevel,
+          avatarId: formData.avatarId,
+          avatarSrc: formData.avatarSrc,
+          progress: {} 
+        });
+      } catch (err) {
+        throw new Error("Student DB Rejected: " + err.message);
+      }
 
       try {
         await emailjs.send(
@@ -112,7 +128,6 @@ export default function RegistrationForm({ language, onSuccess }) {
             student_name: formData.studentName,
             user_email: formData.email,
             tier: formData.subscriptionTier,
-            // UPGRADED: Email check logic
             bank_digits: formData.subscriptionTier !== 'hung-rui-chen' ? formData.bankLastFour : 'N/A'
           },
           'dvpGNHjW5ZIsFra3X' 
@@ -136,15 +151,52 @@ export default function RegistrationForm({ language, onSuccess }) {
         <h2 className="text-2xl font-black text-green-800 mb-4">
           {language === 'zh' ? '註冊成功！' : 'Registration Successful!'}
         </h2>
-        <p className="text-green-700 mb-6 font-medium">
+        <p className="text-green-700 mb-4 font-medium">
           {language === 'zh' ? '歡迎加入 Slick Time。您的家庭帳號已建立。' : 'Welcome to Slick Time. Your family account is ready.'}
-          {/* UPGRADED: Success UI check logic */}
-          {formData.subscriptionTier !== 'hung-rui-chen' && (
-            <span className="block mt-2 text-sm">
-              {language === 'zh' ? '我們將在確認您的匯款後啟用進階權限。' : 'Premium access will be granted once your transfer is verified.'}
-            </span>
-          )}
         </p>
+
+        {/* ARCHITECTURAL UPGRADE: Email Verification Prompt */}
+        {!isOAuth && (
+          <div className="bg-sky-50 border border-sky-200 p-4 rounded-xl mb-4 text-left shadow-sm">
+            <p className="text-sky-800 font-bold text-sm flex items-center gap-2">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+              {language === 'zh' ? '請驗證您的電子郵件' : 'Please Verify Your Email'}
+            </p>
+            <p className="text-sky-700 text-xs mt-1 leading-relaxed">
+              {language === 'zh' ? '我們已發送一封驗證信至您的信箱。請點擊信中的連結以完全啟用您的帳號。' : 'We have sent a verification link to your inbox. Please click the link to fully activate your account.'}
+            </p>
+          </div>
+        )}
+
+        {/* ARCHITECTURAL UPGRADE: Secure Bank Transfer UI */}
+        {formData.subscriptionTier !== 'hung-rui-chen' && (
+          <div className="mt-4 mb-6 text-left bg-white p-5 rounded-xl border-2 border-green-300 shadow-sm">
+            <h3 className="text-lg font-black text-green-900 mb-2 flex items-center gap-2">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+              {language === 'zh' ? '匯款資訊' : 'Bank Transfer Details'}
+            </h3>
+            <p className="text-slate-600 mb-4 text-sm font-medium leading-relaxed">
+              {language === 'zh' ? '請將訂閱款項匯至以下帳戶。完成後，系統將自動核對您提供的後4碼：' : 'Please transfer your subscription fee to the following account. We will verify using your last 4 digits: '}
+              <span className="font-black text-brand-orange text-lg ml-1 tracking-widest">{formData.bankLastFour}</span>
+            </p>
+            
+            <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 font-mono text-sm space-y-3">
+              <div className="flex justify-between border-b border-slate-200 pb-2">
+                <span className="text-slate-500 font-sans">{language === 'zh' ? '銀行名稱 (Bank)' : 'Bank Name'}</span>
+                <span className="font-bold text-slate-800">台新國際商業銀行 (Taishin Bank)</span> 
+              </div>
+              <div className="flex justify-between border-b border-slate-200 pb-2">
+                <span className="text-slate-500 font-sans">{language === 'zh' ? '銀行代碼 (Code)' : 'Bank Code'}</span>
+                <span className="font-bold text-slate-800">812</span> 
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">{language === 'zh' ? '帳號 (Account)' : 'Account Number'}</span>
+                <span className="font-bold text-slate-800 tracking-wider">2093-10-0019768-3</span> 
+              </div>
+            </div>
+          </div>
+        )}
+
         <button 
           onClick={onSuccess}
           className="px-8 py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-lg transition-colors shadow-sm"

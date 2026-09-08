@@ -7,8 +7,9 @@ import {
   createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  GoogleAuthProvider,     // <-- ADDED THIS
-  signInWithPopup         // <-- ADDED THIS
+  GoogleAuthProvider,     
+  signInWithPopup,        
+  sendEmailVerification   
 } from "firebase/auth";
 
 const firebaseConfig = {
@@ -21,12 +22,12 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+// Initialize and export core Firebase services
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const auth = getAuth(app);
-
-// Initialize OAuth Providers
-export const googleProvider = new GoogleAuthProvider(); // <-- ADDED THIS
+export const googleProvider = new GoogleAuthProvider(); 
 
 // Export auth functions for components to use
 export { 
@@ -34,5 +35,6 @@ export {
   createUserWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  signInWithPopup // <-- ADDED THIS
+  signInWithPopup, 
+  sendEmailVerification
 };
