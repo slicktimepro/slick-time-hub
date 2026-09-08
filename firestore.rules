@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ----------------------------------------------------------------------
+    // GLOBAL HELPER FUNCTIONS
+    // Keeping rules modular and DRY (Don't Repeat Yourself)
+    // ----------------------------------------------------------------------
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // ARCHITECTURAL UPGRADE: Centralized Role-Based Access Control (RBAC)
+    function isAdmin() {
+      return isAuthenticated() && request.auth.uid == 'OFmUHrJIs8Nr2Opc25VVzo9LRTA2';
+    }
+
+    // ----------------------------------------------------------------------
+    // ADMIN QUEUE (Founding Members Verification)
+    // ----------------------------------------------------------------------
+    match /admin_queue/{document=**} {
+      // Strict lockdown: Only the designated system admin can read, write, 
+      // or process the bank transfer verification queue.
+      allow read, write: if isAdmin();
+    }
+
+    // ----------------------------------------------------------------------
+    // USERS COLLECTION (Parent Data)
+    // ----------------------------------------------------------------------
+    match /users/{userId} {
+      
+      // Allow reading only if the user is requesting their own document
+      allow read: if isOwner(userId);
+      
+      // Restrict document creation
+      // Tradeoff: We force the 'subscriptionTier' to 'free' on creation to prevent 
+      // malicious actors from setting their own tier to 'grand-sub' via the client console.
+      allow create: if isOwner(userId) 
+                    && request.resource.data.subscriptionTier == 'free';
+                    
+      // Restrict document updates
+      // Prevents client-side mutation of the subscription tier. Upgrades must be 
+      // handled securely via a backend Cloud Function after ECPay/ATM confirmation.
+      allow update: if isOwner(userId)
+                    && request.resource.data.subscriptionTier == resource.data.subscriptionTier;
+      
+      // Prohibit hard deletes from the client. 
+      // We should use soft-deletes (e.g., status: 'deactivated') for compliance and data retention.
+      allow delete: if false; 
+
+      // ----------------------------------------------------------------------
+      // STUDENTS SUBCOLLECTION (Child Data)
+      // Path: /users/{userId}/students/{studentId}
+      // ----------------------------------------------------------------------
+      match /students/{studentId} {
+        
+        // The family unit (parent/student) shares the auth token, so they can read their own students
+        allow read: if isOwner(userId);
+        
+        // Allow creating and updating student profiles (screen name, avatar, etc.)
+        allow create, update: if isOwner(userId);
+        
+        // Prevent accidental client-side deletion of a student profile to protect progress data
+        allow delete: if false; 
+      }
+    }
+  }
+}
